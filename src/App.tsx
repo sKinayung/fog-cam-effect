@@ -2,6 +2,7 @@
 import { useEffect } from 'react';
 import { useAppStore } from './store/useAppStore';
 import { Camera } from './components/Camera'; 
+import { CanvasRenderer } from './components/CanvasRender';
 
 export default function App() {
   const theme = useAppStore((state) => state.theme);
@@ -12,12 +13,8 @@ export default function App() {
 
   return (
     <div className="relative w-full h-screen overflow-hidden bg-black">
-      {/* Layer 1: Hidden Video Element (Camera Source) */}
       <Camera /> 
-      
-      <div className="absolute inset-0 flex items-center justify-center text-white text-xl z-50">
-        Kamera & AI sedang dimuat di background...
-      </div>
+      <CanvasRenderer />
     </div>
   );
 }
