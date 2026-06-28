@@ -13,11 +13,10 @@ export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElemen
   
   // State pergerakan jari untuk interpolasi
   const fingerPos = useRef({ x: 0, y: 0, prevX: 0, prevY: 0, isTracking: false });
-
-  const { fogCanvasRef, initFog, drawErase, regenerateFog } = useFogSimulation();
+  const { fogCanvasRef, initFog, drawErase, regenerateFog, addBreath } = useFogSimulation();
 
   const resetTrigger = useAppStore(state => state.resetTrigger);
-  const blowCooldownRef = useRef<boolean>(false);
+
 
   useEffect(() => {
     const canvas = mainCanvasRef.current;
@@ -140,31 +139,43 @@ export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElemen
           }
         }
 
-        // 4. Proses Face Tracking (Deteksi Tiupan / Blowing)
+        // 4. Proses Face Tracking
         const faceModel = coreRefs.faceLandmarker;
         if (faceModel) {
           const faceResults = faceModel.detectForVideo(video, performance.now());
           
           if (faceResults.faceBlendshapes && faceResults.faceBlendshapes.length > 0) {
             const blendshapes = faceResults.faceBlendshapes[0].categories;
-            
-            // Cari skor 'mouthPucker' (bibir mengerucut maju seperti meniup)
             const mouthPucker = blendshapes.find(shape => shape.categoryName === 'mouthPucker')?.score || 0;
             
-            // Jika skor di atas threshold (0.6) dan tidak sedang dalam cooldown
-            if (mouthPucker > 0.6 && !blowCooldownRef.current) {
-              console.log("Tiupan terdeteksi! Mengembunkan ulang cermin...");
-              initFog(width, height); // Reset kabut
+            // Turunkan threshold menjadi 0.3 agar lebih responsif mendeteksi awal tiupan
+            if (mouthPucker > 0.3 && faceResults.faceLandmarks.length > 0) {
+              // Landmark 13 adalah bibir bagian tengah atas (posisi pusat tiupan)
+              const lips = faceResults.faceLandmarks[0][13]; 
               
-              blowCooldownRef.current = true;
-              // Cooldown 2 detik agar tidak mereset berulang-ulang dalam 1 tarikan napas
-              setTimeout(() => {
-                blowCooldownRef.current = false;
-              }, 2000);
+              // Konversi titik mulut ke layar (Jangan lupa di-mirror X nya)
+              const breathX = (1 - lips.x) * width;
+              const breathY = lips.y * height;
+              
+              // Radius sebaran embun dinamis: 
+              // Semakin kuat user memonyongkan bibir, semakin lebar area tiupannya
+              const radius = width * 0.15 + (mouthPucker * 150);
+              
+              // Aplikasikan embun napas ke kanvas
+              addBreath(breathX, breathY, mouthPucker, radius);
+              
+              // Opsional: Tampilkan indikator mulut jika showLandmarks aktif
+              const showLandmarks = useAppStore.getState().showLandmarks;
+              if (showLandmarks) {
+                ctx.beginPath();
+                ctx.arc(breathX, breathY, radius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(0, 255, 255, ${mouthPucker})`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+              }
             }
           }
         }
-
         // 5. Update dan Gambar Kabut
         regenerateFog();
         if (fogCanvasRef.current) {
