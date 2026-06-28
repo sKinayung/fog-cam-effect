@@ -16,6 +16,9 @@ export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElemen
 
   const { fogCanvasRef, initFog, drawErase, regenerateFog } = useFogSimulation();
 
+  const resetTrigger = useAppStore(state => state.resetTrigger);
+  const blowCooldownRef = useRef<boolean>(false);
+
   useEffect(() => {
     const canvas = mainCanvasRef.current;
     if (!canvas) return;
@@ -34,6 +37,14 @@ export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElemen
 
     return () => window.removeEventListener('resize', handleResize);
   }, [mainCanvasRef, initFog]);
+
+  // Mendengarkan tombol reset manual dari UI
+  useEffect(() => {
+    const canvas = mainCanvasRef.current;
+    if (canvas) {
+      initFog(canvas.width, canvas.height);
+    }
+  }, [resetTrigger, initFog, mainCanvasRef]);
 
   useEffect(() => {
     const loop = () => {
@@ -129,7 +140,32 @@ export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElemen
           }
         }
 
-        // 4. Update dan Gambar Kabut
+        // 4. Proses Face Tracking (Deteksi Tiupan / Blowing)
+        const faceModel = coreRefs.faceLandmarker;
+        if (faceModel) {
+          const faceResults = faceModel.detectForVideo(video, performance.now());
+          
+          if (faceResults.faceBlendshapes && faceResults.faceBlendshapes.length > 0) {
+            const blendshapes = faceResults.faceBlendshapes[0].categories;
+            
+            // Cari skor 'mouthPucker' (bibir mengerucut maju seperti meniup)
+            const mouthPucker = blendshapes.find(shape => shape.categoryName === 'mouthPucker')?.score || 0;
+            
+            // Jika skor di atas threshold (0.6) dan tidak sedang dalam cooldown
+            if (mouthPucker > 0.6 && !blowCooldownRef.current) {
+              console.log("Tiupan terdeteksi! Mengembunkan ulang cermin...");
+              initFog(width, height); // Reset kabut
+              
+              blowCooldownRef.current = true;
+              // Cooldown 2 detik agar tidak mereset berulang-ulang dalam 1 tarikan napas
+              setTimeout(() => {
+                blowCooldownRef.current = false;
+              }, 2000);
+            }
+          }
+        }
+
+        // 5. Update dan Gambar Kabut
         regenerateFog();
         if (fogCanvasRef.current) {
           // Efek blur kabut (opsional, gunakan dengan bijak karena berat)
