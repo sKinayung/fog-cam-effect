@@ -14,7 +14,8 @@ interface Droplet {
 
 export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElement | null>) => {
   const requestRef = useRef<number>(0);
-  const { setFps, resetTrigger } = useAppStore();
+  const setFps = useAppStore(state => state.setFps);
+const resetTrigger = useAppStore(state => state.resetTrigger);
   const lastTimeRef = useRef<number>(performance.now());
   const framesRef = useRef<number>(0);
   
