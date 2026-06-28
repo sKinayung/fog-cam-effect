@@ -5,24 +5,68 @@ import { useAppStore } from '../store/useAppStore';
 import { useFogSimulation } from './UseFogSimulation';
 import { lerp } from '../utils/drawUtils';
 
+interface Droplet {
+  x: number;
+  y: number;
+  speed: number;
+  size: number;
+}
+
 export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElement | null>) => {
   const requestRef = useRef<number>(0);
-  const setFps = useAppStore(state => state.setFps);
+  const { setFps, resetTrigger } = useAppStore();
   const lastTimeRef = useRef<number>(performance.now());
   const framesRef = useRef<number>(0);
   
-  // State pergerakan jari untuk interpolasi
+  // State Pelacakan (Jari & Mouse)
   const fingerPos = useRef({ x: 0, y: 0, prevX: 0, prevY: 0, isTracking: false });
+  const pointerPos = useRef({ x: 0, y: 0, prevX: 0, prevY: 0, isDown: false });
+  
+  // State Partikel Tetesan Air
+  const dropletsRef = useRef<Droplet[]>([]);
+
   const { fogCanvasRef, initFog, drawErase, regenerateFog, addBreath } = useFogSimulation();
 
-  const resetTrigger = useAppStore(state => state.resetTrigger);
+  // Reset Canvas Trigger
+  useEffect(() => {
+    const canvas = mainCanvasRef.current;
+    if (canvas) initFog(canvas.width, canvas.height);
+  }, [resetTrigger, initFog, mainCanvasRef]);
 
-
+  // Event Listeners untuk Mouse & Touch
   useEffect(() => {
     const canvas = mainCanvasRef.current;
     if (!canvas) return;
-    
-    // Set ukuran awal
+
+    const handlePointerDown = (e: MouseEvent | TouchEvent) => {
+      pointerPos.current.isDown = true;
+      const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX;
+      const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
+      pointerPos.current.x = clientX;
+      pointerPos.current.y = clientY;
+      pointerPos.current.prevX = clientX;
+      pointerPos.current.prevY = clientY;
+      drawErase(clientX, clientY, clientX, clientY);
+    };
+
+    const handlePointerMove = (e: MouseEvent | TouchEvent) => {
+      if (!pointerPos.current.isDown) return;
+      const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX;
+      const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
+      pointerPos.current.x = clientX;
+      pointerPos.current.y = clientY;
+    };
+
+    const handlePointerUp = () => { pointerPos.current.isDown = false; };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('mousemove', handlePointerMove);
+    window.addEventListener('mouseup', handlePointerUp);
+    window.addEventListener('touchstart', handlePointerDown);
+    window.addEventListener('touchmove', handlePointerMove);
+    window.addEventListener('touchend', handlePointerUp);
+
+    // Setup ukuran kanvas awal
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
     initFog(canvas.width, canvas.height);
@@ -34,17 +78,18 @@ export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElemen
     };
     window.addEventListener('resize', handleResize);
 
-    return () => window.removeEventListener('resize', handleResize);
-  }, [mainCanvasRef, initFog]);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('mousemove', handlePointerMove);
+      window.removeEventListener('mouseup', handlePointerUp);
+      window.removeEventListener('touchstart', handlePointerDown);
+      window.removeEventListener('touchmove', handlePointerMove);
+      window.removeEventListener('touchend', handlePointerUp);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [mainCanvasRef, initFog, drawErase]);
 
-  // Mendengarkan tombol reset manual dari UI
-  useEffect(() => {
-    const canvas = mainCanvasRef.current;
-    if (canvas) {
-      initFog(canvas.width, canvas.height);
-    }
-  }, [resetTrigger, initFog, mainCanvasRef]);
-
+  // Main Render Loop (60 FPS)
   useEffect(() => {
     const loop = () => {
       const canvas = mainCanvasRef.current;
@@ -64,11 +109,10 @@ export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElemen
           lastTimeRef.current = now;
         }
 
-        // 2. Gambar Video Webcam sebagai Background (Di-mirror)
+        // 2. Gambar Background (Kamera Mirror)
         ctx.save();
         ctx.translate(width, 0);
         ctx.scale(-1, 1);
-        // Posisikan video agar memenuhi layar (cover)
         const videoRatio = video.videoWidth / video.videoHeight;
         const canvasRatio = width / height;
         let drawW = width, drawH = height, drawX = 0, drawY = 0;
@@ -81,108 +125,118 @@ export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElemen
           drawY = (height - drawH) / 2;
         }
         ctx.drawImage(video, drawX, drawY, drawW, drawH);
-        ctx.restore(); // Kembalikan koordinat normal
+        ctx.restore();
 
-        // 3. Proses Hand Tracking
+        // 3. Proses Pointer/Mouse (Prioritas UI manual)
+        if (pointerPos.current.isDown) {
+          drawErase(pointerPos.current.x, pointerPos.current.y, pointerPos.current.prevX, pointerPos.current.prevY);
+          pointerPos.current.prevX = pointerPos.current.x;
+          pointerPos.current.prevY = pointerPos.current.y;
+        }
+
+        // 4. Proses Hand Tracking (MediaPipe)
         if (handModel) {
           const results = handModel.detectForVideo(video, performance.now());
           
           if (results.landmarks.length > 0) {
-            // Ambil ujung jari telunjuk (Index Finger Tip -> Landmark ke-8)
             const indexFinger = results.landmarks[0][8]; 
-            
-            // Konversi ke koordinat kanvas (Mirroring koordinat X)
             const targetX = (1 - indexFinger.x) * width;
             const targetY = indexFinger.y * height;
 
             if (!fingerPos.current.isTracking) {
-              // TANGAN BARU SAJA MASUK FRAME:
-              // Langsung set semua posisi (sekarang & sebelumnya) ke titik yang baru
               fingerPos.current.x = targetX;
               fingerPos.current.y = targetY;
               fingerPos.current.prevX = targetX;
               fingerPos.current.prevY = targetY;
               fingerPos.current.isTracking = true;
-              
-              // Hapus hanya di titik awal saja (sebagai dot)
               drawErase(targetX, targetY, targetX, targetY);
             } else {
-              // TANGAN SEDANG BERGERAK DI DALAM FRAME:
-              // Lakukan Lerp (Smoothing) agar pergerakan tidak patah-patah
               fingerPos.current.x = lerp(fingerPos.current.x, targetX, 0.4);
               fingerPos.current.y = lerp(fingerPos.current.y, targetY, 0.4);
-
-              // Hapus kabut dari titik sebelumnya ke titik saat ini
-              drawErase(
-                fingerPos.current.x, 
-                fingerPos.current.y, 
-                fingerPos.current.prevX, 
-                fingerPos.current.prevY
-              );
-
-              // Update posisi sebelumnya untuk frame berikutnya
+              drawErase(fingerPos.current.x, fingerPos.current.y, fingerPos.current.prevX, fingerPos.current.prevY);
               fingerPos.current.prevX = fingerPos.current.x;
               fingerPos.current.prevY = fingerPos.current.y;
             }
             
-            // Gambar indikator ujung jari (Opsional/Debug)
             const showLandmarks = useAppStore.getState().showLandmarks;
             if (showLandmarks) {
+              // Menambahkan efek "Glow" pada jari (Finger Glow)
               ctx.beginPath();
-              ctx.arc(fingerPos.current.x, fingerPos.current.y, 8, 0, 2 * Math.PI);
-              ctx.fillStyle = 'cyan';
+              ctx.arc(fingerPos.current.x, fingerPos.current.y, 10, 0, 2 * Math.PI);
+              ctx.fillStyle = 'rgba(0, 255, 255, 0.8)';
+              ctx.shadowBlur = 15;
+              ctx.shadowColor = 'cyan';
               ctx.fill();
+              ctx.shadowBlur = 0; // Reset
             }
           } else {
-            // TANGAN KELUAR FRAME: Putus status tracking
             fingerPos.current.isTracking = false;
           }
         }
 
-        // 4. Proses Face Tracking
+        // 5. Proses Face Tracking (Deteksi Tiupan)
         const faceModel = coreRefs.faceLandmarker;
         if (faceModel) {
           const faceResults = faceModel.detectForVideo(video, performance.now());
-          
           if (faceResults.faceBlendshapes && faceResults.faceBlendshapes.length > 0) {
             const blendshapes = faceResults.faceBlendshapes[0].categories;
             const mouthPucker = blendshapes.find(shape => shape.categoryName === 'mouthPucker')?.score || 0;
             
-            // Turunkan threshold menjadi 0.3 agar lebih responsif mendeteksi awal tiupan
             if (mouthPucker > 0.3 && faceResults.faceLandmarks.length > 0) {
-              // Landmark 13 adalah bibir bagian tengah atas (posisi pusat tiupan)
               const lips = faceResults.faceLandmarks[0][13]; 
-              
-              // Konversi titik mulut ke layar (Jangan lupa di-mirror X nya)
               const breathX = (1 - lips.x) * width;
               const breathY = lips.y * height;
-              
-              // Radius sebaran embun dinamis: 
-              // Semakin kuat user memonyongkan bibir, semakin lebar area tiupannya
               const radius = width * 0.15 + (mouthPucker * 150);
-              
-              // Aplikasikan embun napas ke kanvas
               addBreath(breathX, breathY, mouthPucker, radius);
-              
-              // Opsional: Tampilkan indikator mulut jika showLandmarks aktif
-              const showLandmarks = useAppStore.getState().showLandmarks;
-              if (showLandmarks) {
-                ctx.beginPath();
-                ctx.arc(breathX, breathY, radius, 0, Math.PI * 2);
-                ctx.strokeStyle = `rgba(0, 255, 255, ${mouthPucker})`;
-                ctx.lineWidth = 2;
-                ctx.stroke();
-              }
             }
           }
         }
-        // 5. Update dan Gambar Kabut
+
+        // 6. Regenerasi Kabut
         regenerateFog();
+
+        // 7. Proses Partikel Tetesan Air (Water Droplets)
+        // Spawn tetesan air secara acak berdasarkan ketebalan kabut
+        const density = useAppStore.getState().fogDensity;
+        if (Math.random() < (density * 0.05) && dropletsRef.current.length < 15) {
+          dropletsRef.current.push({
+            x: Math.random() * width,
+            y: Math.random() * (height / 2), // Muncul di separuh atas
+            speed: 1 + Math.random() * 3,
+            size: 2 + Math.random() * 4
+          });
+        }
+
+        // Update posisi tetesan dan hapus kabut di jalurnya
+        for (let i = dropletsRef.current.length - 1; i >= 0; i--) {
+          const drop = dropletsRef.current[i];
+          const prevY = drop.y;
+          drop.y += drop.speed;
+          
+          // Menggunakan drawErase bawaan secara manual (tanpa custom hook)
+          // untuk membuat jalur tipis bersih yang dilalui air
+          if (fogCanvasRef.current) {
+            const fogCtx = fogCanvasRef.current.getContext('2d');
+            if (fogCtx) {
+              fogCtx.globalCompositeOperation = 'destination-out';
+              fogCtx.beginPath();
+              fogCtx.lineCap = 'round';
+              fogCtx.lineWidth = drop.size;
+              fogCtx.moveTo(drop.x, prevY);
+              fogCtx.lineTo(drop.x, drop.y);
+              fogCtx.stroke();
+            }
+          }
+
+          // Hapus tetesan jika keluar layar
+          if (drop.y > height) {
+            dropletsRef.current.splice(i, 1);
+          }
+        }
+
+        // 8. Render Layer Kabut Akhir
         if (fogCanvasRef.current) {
-          // Efek blur kabut (opsional, gunakan dengan bijak karena berat)
-          ctx.filter = 'blur(4px)'; 
           ctx.drawImage(fogCanvasRef.current, 0, 0);
-          ctx.filter = 'none';
         }
       }
 
@@ -191,5 +245,5 @@ export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElemen
 
     requestRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(requestRef.current);
-  }, [mainCanvasRef, drawErase, regenerateFog, fogCanvasRef, setFps]);
+  }, [mainCanvasRef, drawErase, regenerateFog, addBreath, fogCanvasRef, setFps]);
 };
