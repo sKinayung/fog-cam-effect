@@ -86,27 +86,34 @@ export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElemen
             const targetY = indexFinger.y * height;
 
             if (!fingerPos.current.isTracking) {
-              // Pertama kali terdeteksi, langsung letakkan posisinya
+              // TANGAN BARU SAJA MASUK FRAME:
+              // Langsung set semua posisi (sekarang & sebelumnya) ke titik yang baru
               fingerPos.current.x = targetX;
               fingerPos.current.y = targetY;
+              fingerPos.current.prevX = targetX;
+              fingerPos.current.prevY = targetY;
               fingerPos.current.isTracking = true;
+              
+              // Hapus hanya di titik awal saja (sebagai dot)
+              drawErase(targetX, targetY, targetX, targetY);
             } else {
+              // TANGAN SEDANG BERGERAK DI DALAM FRAME:
               // Lakukan Lerp (Smoothing) agar pergerakan tidak patah-patah
               fingerPos.current.x = lerp(fingerPos.current.x, targetX, 0.4);
               fingerPos.current.y = lerp(fingerPos.current.y, targetY, 0.4);
+
+              // Hapus kabut dari titik sebelumnya ke titik saat ini
+              drawErase(
+                fingerPos.current.x, 
+                fingerPos.current.y, 
+                fingerPos.current.prevX, 
+                fingerPos.current.prevY
+              );
+
+              // Update posisi sebelumnya untuk frame berikutnya
+              fingerPos.current.prevX = fingerPos.current.x;
+              fingerPos.current.prevY = fingerPos.current.y;
             }
-
-            // Hapus kabut di koordinat jari
-            drawErase(
-              fingerPos.current.x, 
-              fingerPos.current.y, 
-              fingerPos.current.prevX || fingerPos.current.x, 
-              fingerPos.current.prevY || fingerPos.current.y
-            );
-
-            // Simpan posisi sebelumnya untuk menggambar garis sambung
-            fingerPos.current.prevX = fingerPos.current.x;
-            fingerPos.current.prevY = fingerPos.current.y;
             
             // Gambar indikator ujung jari (Opsional/Debug)
             const showLandmarks = useAppStore.getState().showLandmarks;
@@ -117,6 +124,7 @@ export const useAnimationLoop = (mainCanvasRef: React.RefObject<HTMLCanvasElemen
               ctx.fill();
             }
           } else {
+            // TANGAN KELUAR FRAME: Putus status tracking
             fingerPos.current.isTracking = false;
           }
         }
