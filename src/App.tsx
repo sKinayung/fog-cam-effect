@@ -1,5 +1,5 @@
 // src/App.tsx
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { useAppStore } from './store/useAppStore';
 import { Camera } from './components/Camera';
 import { CanvasRenderer } from './components/CanvasRender';
