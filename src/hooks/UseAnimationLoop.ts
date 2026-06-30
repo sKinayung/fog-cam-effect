@@ -101,6 +101,8 @@ const resetTrigger = useAppStore(state => state.resetTrigger);
       if (canvas && ctx && video && video.readyState >= 2) {
         const { width, height } = canvas;
 
+        let isDrawingActive = pointerPos.current.isDown; 
+
         // 1. Hitung FPS
         const now = performance.now();
         framesRef.current++;
@@ -128,18 +130,14 @@ const resetTrigger = useAppStore(state => state.resetTrigger);
         ctx.drawImage(video, drawX, drawY, drawW, drawH);
         ctx.restore();
 
-        // 3. Proses Pointer/Mouse (Prioritas UI manual)
-        if (pointerPos.current.isDown) {
-          drawErase(pointerPos.current.x, pointerPos.current.y, pointerPos.current.prevX, pointerPos.current.prevY);
-          pointerPos.current.prevX = pointerPos.current.x;
-          pointerPos.current.prevY = pointerPos.current.y;
-        }
-
-        // 4. Proses Hand Tracking (MediaPipe)
+        // 3. Proses Hand Tracking (Dijalankan PERTAMA)
         if (handModel) {
           const results = handModel.detectForVideo(video, performance.now());
           
           if (results.landmarks.length > 0) {
+            // TANGAN TERDETEKSI: Kunci sistem agar tidak memproses tiupan
+            isDrawingActive = true; 
+            
             const indexFinger = results.landmarks[0][8]; 
             const targetX = (1 - indexFinger.x) * width;
             const targetY = indexFinger.y * height;
@@ -150,45 +148,56 @@ const resetTrigger = useAppStore(state => state.resetTrigger);
               fingerPos.current.prevX = targetX;
               fingerPos.current.prevY = targetY;
               fingerPos.current.isTracking = true;
+              
               drawErase(targetX, targetY, targetX, targetY);
             } else {
               fingerPos.current.x = lerp(fingerPos.current.x, targetX, 0.4);
               fingerPos.current.y = lerp(fingerPos.current.y, targetY, 0.4);
+              
               drawErase(fingerPos.current.x, fingerPos.current.y, fingerPos.current.prevX, fingerPos.current.prevY);
+              
               fingerPos.current.prevX = fingerPos.current.x;
               fingerPos.current.prevY = fingerPos.current.y;
             }
             
             const showLandmarks = useAppStore.getState().showLandmarks;
             if (showLandmarks) {
-              // Menambahkan efek "Glow" pada jari (Finger Glow)
               ctx.beginPath();
               ctx.arc(fingerPos.current.x, fingerPos.current.y, 10, 0, 2 * Math.PI);
               ctx.fillStyle = 'rgba(0, 255, 255, 0.8)';
               ctx.shadowBlur = 15;
               ctx.shadowColor = 'cyan';
               ctx.fill();
-              ctx.shadowBlur = 0; // Reset
+              ctx.shadowBlur = 0;
             }
           } else {
             fingerPos.current.isTracking = false;
           }
         }
 
-        // 5. Proses Face Tracking (Deteksi Tiupan)
-        const faceModel = coreRefs.faceLandmarker;
-        if (faceModel) {
-          const faceResults = faceModel.detectForVideo(video, performance.now());
-          if (faceResults.faceBlendshapes && faceResults.faceBlendshapes.length > 0) {
-            const blendshapes = faceResults.faceBlendshapes[0].categories;
-            const mouthPucker = blendshapes.find(shape => shape.categoryName === 'mouthPucker')?.score || 0;
-            
-            if (mouthPucker > 0.3 && faceResults.faceLandmarks.length > 0) {
-              const lips = faceResults.faceLandmarks[0][13]; 
-              const breathX = (1 - lips.x) * width;
-              const breathY = lips.y * height;
-              const radius = width * 0.15 + (mouthPucker * 150);
-              addBreath(breathX, breathY, mouthPucker, radius);
+        // 4. Proses Pointer/Mouse 
+        if (pointerPos.current.isDown) {
+          drawErase(pointerPos.current.x, pointerPos.current.y, pointerPos.current.prevX, pointerPos.current.prevY);
+          pointerPos.current.prevX = pointerPos.current.x;
+          pointerPos.current.prevY = pointerPos.current.y;
+        }
+
+        // 5. Proses Face Tracking (HANYA DIJALANKAN JIKA TIDAK ADA TANGAN ATAU MOUSE)
+        if (!isDrawingActive) {
+          const faceModel = coreRefs.faceLandmarker;
+          if (faceModel) {
+            const faceResults = faceModel.detectForVideo(video, performance.now());
+            if (faceResults.faceBlendshapes && faceResults.faceBlendshapes.length > 0) {
+              const blendshapes = faceResults.faceBlendshapes[0].categories;
+              const mouthPucker = blendshapes.find(shape => shape.categoryName === 'mouthPucker')?.score || 0;
+              
+              if (mouthPucker > 0.3 && faceResults.faceLandmarks.length > 0) {
+                const lips = faceResults.faceLandmarks[0][13]; 
+                const breathX = (1 - lips.x) * width;
+                const breathY = lips.y * height;
+                const radius = width * 0.15 + (mouthPucker * 150);
+                addBreath(breathX, breathY, mouthPucker, radius);
+              }
             }
           }
         }
